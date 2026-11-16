@@ -1,5 +1,9 @@
 # TikTok 运营节点一键包（VLESS + WS + TLS，DNS 防泄漏）
 
+**核心：Xray**（xray-core），VLESS + WS + TLS 单协议。
+
+> 想要一个核心管所有协议的 sing-box 版本？看 [sing-box-node](https://github.com/nbbk/sing-box-node)（核心：sing-box，VLESS/Trojan/VMess/Shadowsocks/Hysteria2/TUIC 多协议合一）。
+
 在你自己的墙外服务器上跑一条命令，节点即上线。包里已把 DNS 防泄漏做全，装完自带泄漏自检。
 
 ## 前置条件
