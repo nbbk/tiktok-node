@@ -62,9 +62,15 @@ TikTok 从 IP、DNS、时区、SIM 卡几个地方一起判断地区，节点配
   返回 `101` = 正常；返回 `200 ok` = Caddy 没把请求转给 xray，跑 `docker compose down && docker compose up -d` 重建容器再测；返回 `400` = xray 拒绝握手，核对手机上的 UUID 和 WS 路径跟 config.json 是否一致。
 - **Caddy 拿不到证书**：核对域名 A 记录指到本机 IP、云厂商安全组放行 80/443；看日志 `docker logs tiktok-caddy --tail 20`。
 
+## 停止 / 删除节点
+
+- **停止（保留配置，可再启动）**：在节点目录里跑 `bash stop.sh`，会停掉容器并检查 80/443/8080 是否已释放；再启动跑 `docker compose up -d`。远程一键（不用先下载）：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash`
+- **彻底删除**：`bash stop.sh --remove`，会删容器、数据卷、配置目录，并恢复 IPv6（删 `/etc/sysctl.d/99-tiktok-node.conf`）。远程一键：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash -s -- --remove`
+- **手动停**：`docker compose down`（保留配置）或 `docker compose down -v`（连数据卷一起删）
+- stop.sh 停完会逐个检查端口：如果某个端口仍被占用，会直接列出占用它的进程，照着处理就行；如果占用它的是别的程序，先停掉那个程序或换一台服务器。
+
 ## 说明
 
 - 架构：有域名时 Caddy 在 443 终止 TLS，只把随机 WS 路径反代到 xray，其余请求返回普通网页响应（伪装）
 - 链接里的 UUID 等同于密码，不要外传；泄露了重跑脚本即可换一套
-- 停止/卸载：在目录里运行 `docker compose down`；恢复 IPv6：删掉 `/etc/sysctl.d/99-tiktok-node.conf` 后执行 `sysctl -p`
 - 如果 `check.sh` 显示 hosting=true（机房 IP）且之后出现 0 播放/限流，优先换住宅/ISP 的干净 IP，换节点比调参数管用
