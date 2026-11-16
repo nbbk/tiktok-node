@@ -14,11 +14,13 @@
 
 ### 远程一键安装（推荐，不用传包）
 
-服务器上直接跑一条命令（把 `yinni.930327.xyz` 换成你的域名，不给域名则现场问）：
+服务器上直接跑一条命令，运行后会问域名，输入这台服务器的域名就行：
 
 ```
-curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | bash -s yinni.930327.xyz
+curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | bash
 ```
+
+也可以把域名直接跟在命令后面（比如 `... | bash -s yinni.930327.xyz`）。换服务器、换地区时不用改脚本：域名先解析到新服务器，再跑同一条命令、输入新域名即可；每次运行都会生成新的 UUID 和 WS 路径，每个服务器一套独立的节点。
 
 ### 本地安装（传包）
 
