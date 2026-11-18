@@ -15,7 +15,8 @@
 ## 前置条件
 
 - 一台墙外服务器（你机场现有的机器就行），Ubuntu/Debian，root 权限
-- 一个域名，已解析（A 记录）到这台机器，**80 端口必须空闲**（Caddy 签证书走 HTTP-01 验证必须用 80；80 被占 TLS 装不了）；443 端口放行——**有域名强烈建议用**，Caddy 会自动签 TLS 证书
+- 一个域名，已解析（A 记录）到这台机器，**有域名强烈建议用**，Caddy 会自动签 TLS 证书；443 端口放行
+  - 证书签发方式安装时二选一（见“证书签发方式”一节）：默认走 80 方式时 **80 端口必须空闲**（Caddy 签证书走 HTTP-01 验证必须用 80；80 被占 TLS 装不了）；选 DNS 验证时 80 不用空闲
   - **端口可以自定义**：HTTPS 端口默认 443、明文 WS 端口默认 8080；默认端口被占时安装会让你改一个高位端口（如 8443、24443、30000），直接回车就是默认值
   - 没有域名也能跑：直接回车跳过，用 IP + 明文 WS（默认 8080，可改高位端口；能用，但不如 TLS 隐蔽，之后补域名重跑即可升级）
 - 服务器地区 = 你要做的 TikTok 地区（美区、东南亚、英国……），**节点 IP 的地区必须和运营地区一致**，否则直接限流
@@ -31,16 +32,16 @@
 curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | bash
 ```
 
-也可以把域名直接跟在命令后面（比如 `... | bash -s yinni.930327.xyz`）。换服务器、换地区时不用改脚本：域名先解析到新服务器，再跑同一条命令、输入新域名即可；每次运行都会生成新的 UUID 和 WS 路径，每个服务器一套独立的节点。
+也可以把域名直接跟在命令后面（比如 `... | bash -s example.com`）。换服务器、换地区时不用改脚本：域名先解析到新服务器，再跑同一条命令、输入新域名即可；每次运行都会生成新的 UUID 和 WS 路径，每个服务器一套独立的节点。
 
 **自定义端口**：安装时会问 HTTPS 端口（TLS 模式）或 WS 端口（明文模式），直接回车用默认（443 / 8080）；默认端口被占就填个高位端口，如 8443、24443、30000。也可以提前预设好，安装时不再问：
 
 ```
-HTTPS_PORT=8443 curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | bash -s yinni.930327.xyz
+HTTPS_PORT=8443 curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | bash -s example.com
 WS_PORT=9080 bash install.sh
 ```
 
-注意：**80 端口必须空闲**，Caddy 签证书走 HTTP-01 验证必须用 80；如果 80 被占，TLS 装不了，要么换一台服务器，要么不填域名走明文模式。
+注意：选默认走 80 方式时 **80 端口必须空闲**，Caddy 签证书走 HTTP-01 验证必须用 80；如果 80 被占，TLS 装不了，要么换一台服务器，要么不填域名走明文模式，要么重跑并选 [2] DNS 验证（要 Cloudflare API 令牌）。
 
 ### 本地安装（传包）
 
@@ -48,6 +49,36 @@ WS_PORT=9080 bash install.sh
 2. 运行：`bash install.sh`
 3. 有域名就输入域名，没有直接回车
 4. 脚本会自动：装 Docker → 禁用 IPv6 → 生成 UUID 和随机 WS 路径 → 启动 xray + Caddy → 拨测 → 输出节点链接、base64 订阅内容、`clash.yaml`，并在服务器上生成 `qr.png`（没有 qrencode 时自动用 apt/yum 安装；实在装不上就把节点链接发给 Muse，它会回你二维码图片），最后自动跑一遍 `check.sh` 自检
+
+## 证书签发方式（安装时二选一，默认走 80）
+
+有域名时安装会问一次，每个选项下面都有解释，直接回车就是默认：
+
+- **[1] 默认走 80（HTTP-01）**：最简单，什么都不用准备，装完 Caddy 自己签证书、到期自己续。前提是 80 端口必须空闲、域名要指向这台落地机。适合单节点、80 没被占的情况。
+- **[2] DNS 验证（Cloudflare，DNS-01）**：不用 80 端口，域名不用改来改去，续签全自动，不怕忘。前提是域名 DNS 在 Cloudflare，要去 Cloudflare 后台开一个只给改 DNS 权限的 API 令牌。适合 80 被占了、多节点、怕忘续签的情况。
+
+开令牌的方法：登录 Cloudflare 后台 → 右上角头像 → My Profile → API Tokens → Create Token → 用“Edit zone DNS”模板 → 权限里只留 Zone:DNS:Edit（和 Zone:Zone:Read），Zone Resources 选你的域名所在的 zone → Create Token，把生成的令牌粘贴给安装脚本。**不要用 Global API Key**（权限太大，泄露了整个账号都危险）。令牌只存在服务器的 `.env` 里（600 权限，只有 root 能读），脚本不会把它打印出来。
+
+也可以提前预设好，安装时不再问（令牌放命令行会进 shell 历史，不放心就安装时交互粘贴，输入时不回显）：
+
+```
+CERT_METHOD=dns CLOUDFLARE_API_TOKEN=你的令牌 curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | bash -s example.com
+```
+
+选 DNS 验证后 80 的变化：Caddy 不再把 80 映射到主机，80 被别的程序占着也不影响安装和续签；Caddy 容器会换成现场编译的带 Cloudflare 插件版本（官方 builder 镜像编，第一次约 1-3 分钟，之后复用），证书续签全自动。
+
+## 手动续签（证书快到期、自动续签失败时）
+
+证书是 Let's Encrypt 的 90 天证书，Caddy 会在到期前 30 天内自动续签，平时不用你管。**只有一种情况要手动续签**：签证书走默认 80 方式（HTTP-01）、且域名现在指向中转机、80 又没转到这台落地机时——也就是中转后面第 2 个及以后的落地。Caddy 续签要走 80 端口验证，验证请求到了中转的 80，却转给了第 1 个落地，续不上。**选了 DNS 验证的落地不需要手动续签**，续签全自动。
+
+手动续签的步骤（到期前 2 周内做，别太早——Caddy 只在到期前 30 天内才开始续）：
+
+1. 先看证书还剩几天：在落地机上跑 `cd ~/tiktok-node-kit && bash check.sh`，看“证书与续签”一节（剩 30 天以内才能续）
+2. 把域名 A 记录改回指向落地机 IP（在 Cloudflare DNS 里改这条 A 记录）
+3. 等 DNS 生效（TTL 一般 5 分钟）；核对：`dig +short example.com` 返回的应该是落地机 IP（例如 203.0.113.1）
+4. 重启 Caddy 触发续签：在落地机目录里跑 `cd ~/tiktok-node-kit && docker compose restart caddy`（或 `docker restart tiktok-caddy`）
+5. 核对新到期日：再跑 `bash check.sh`，看“证书与续签”一节，剩余天数应该回到 90 天左右
+6. 把域名 A 记录改回指向中转机 IP，完事
 
 ## 手机端（关键：节点只解决网络这一半）
 
@@ -76,7 +107,7 @@ TikTok 从 IP、DNS、时区、SIM 卡几个地方一起判断地区，节点配
 - **节点没网、手机全打不开**：先在服务器上测 WS 握手（装完脚本会自动测）：
   `curl -s -i -N --max-time 10 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" https://你的域名:端口/WS路径`
   （端口是安装时选的 HTTPS 端口，默认 443；用默认端口时 `:443` 可省略）返回 `101` = 正常；返回 `200 ok` = Caddy 没把请求转给 xray，跑 `docker compose down && docker compose up -d` 重建容器再测；返回 `400` = xray 拒绝握手，核对手机上的 UUID 和 WS 路径跟 config.json 是否一致。
-- **Caddy 拿不到证书**：核对域名 A 记录指到本机 IP、云厂商安全组放行 80 和 HTTPS 端口、**80 端口没有被别的程序占**；看日志 `docker logs tiktok-caddy --tail 20`。
+- **Caddy 拿不到证书**：走 80 方式时核对域名 A 记录指到本机 IP、云厂商安全组放行 80 和 HTTPS 端口、**80 端口没有被别的程序占**；选 DNS 验证时核对 Cloudflare 令牌没错、权限够（Zone:DNS:Edit）、域名 DNS 确实在 Cloudflare；看日志 `docker logs tiktok-caddy --tail 20`。
 
 ## 停止 / 删除节点
 
@@ -87,6 +118,6 @@ TikTok 从 IP、DNS、时区、SIM 卡几个地方一起判断地区，节点配
 
 ## 说明
 
-- 架构：有域名时 Caddy 在 HTTPS 端口（默认 443，可改高位端口）终止 TLS，只把随机 WS 路径反代到 xray，其余请求返回普通网页响应（伪装）；80 端口只用于证书验证
+- 架构：有域名时 Caddy 在 HTTPS 端口（默认 443，可改高位端口）终止 TLS，只把随机 WS 路径反代到 xray，其余请求返回普通网页响应（伪装）；80 端口只用于证书验证（选 DNS 验证时不用 80，见“证书签发方式”一节）
 - 链接里的 UUID 等同于密码，不要外传；泄露了重跑脚本即可换一套
 - 如果 `check.sh` 显示 hosting=true（机房 IP）且之后出现 0 播放/限流，优先换住宅/ISP 的干净 IP，换节点比调参数管用
