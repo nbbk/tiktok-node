@@ -6,9 +6,15 @@
 #   （不给域名则交互询问；直接回车用 IP + 明文跑）
 #   端口可预设：HTTPS_PORT=8443 bash install.sh [域名]（TLS 模式，默认 443）
 #              WS_PORT=9080 bash install.sh（明文模式，默认 8080）
+#   证书方式可预设：CERT_METHOD=dns CLOUDFLARE_API_TOKEN=你的令牌 bash install.sh [域名]
+#              （CERT_METHOD=1/http 走 80，=2/dns 走 DNS 验证；令牌见 README“证书签发方式”一节）
 # 架构：有域名 -> Caddy 在 HTTPS 端口（默认 443，可改高位端口）终止 TLS，反代本机 xray 的 WS 入站
 #        无域名 -> xray 直接在 WS 端口（默认 8080，可改）跑明文 WS（能用，但不如 TLS 隐蔽）
-# 注意：TLS 模式 80 端口必须空闲（Caddy 签证书走 HTTP-01 验证必须用 80）；80 被占则 TLS 装不了。
+# 证书签发方式（有域名时安装会问，二选一，默认走 80）：
+#   [1] 默认走 80（HTTP-01）：最简单，什么都不用准备；要求 80 空闲
+#   [2] DNS 验证（Cloudflare，DNS-01）：不用 80、不改指向、续签全自动；要一个 Cloudflare API 令牌
+# 注意：选 [1] 时 TLS 模式 80 端口必须空闲（Caddy 签证书走 HTTP-01 验证必须用 80）；80 被占则 TLS 装不了。
+#        选 [2] 时 80 被占也不影响签证书和续签。
 # DNS 防泄漏设计：
 #   1) xray 自身解析走 DoH(1.1.1.1/8.8.8.8) + TCP 兜底，不走 UDP 53 明文 DNS
 #   2) queryStrategy=UseIPv4，只解析 A 记录，不产生 AAAA/IPv6 解析路径
@@ -63,6 +69,53 @@ ask_port() {  # ask_port "提示" 变量名 默认值：反复问到拿到合法
   done
 }
 
+# 证书签发方式：每个选项先印几行解释（作用、适合谁、要什么、代价），再问；直接回车默认 1
+ask_cert_method() {
+  local ans=""
+  while :; do
+    echo "证书签发方式（Caddy 自动签 TLS 证书，两种方式选一种）："
+    echo ""
+    echo "  [1] 默认走 80 端口（HTTP-01）← 默认，直接回车就是 1"
+    echo "      最简单，什么都不用准备，装完 Caddy 自己签证书、到期自己续。"
+    echo "      前提：80 端口必须空闲，域名要指向这台落地机。"
+    echo "      适合：单节点、80 没被占的情况。"
+    echo ""
+    echo "  [2] DNS 验证（Cloudflare，DNS-01）"
+    echo "      不用 80 端口，域名不用改来改去，续签全自动，不怕忘。"
+    echo "      前提：域名 DNS 在 Cloudflare，要去 Cloudflare 后台开一个只给改 DNS 权限的 API 令牌。"
+    echo "      适合：80 被占了、多节点、怕忘续签的情况。"
+    echo ""
+    echo "请输入你的选择："
+    ask "证书签发方式（1=走 80，2=DNS 验证；默认 1，直接回车就是 1）： " CERT_METHOD "1"
+    ans="$CERT_METHOD"
+    case "$ans" in
+      1|http) CERT_METHOD="http"; return 0 ;;
+      2|dns) CERT_METHOD="dns"; return 0 ;;
+      *) echo "输入不合法：$ans（只能填 1 或 2），请重新输入。"; CERT_METHOD="" ;;
+    esac
+  done
+}
+
+# Cloudflare API 令牌：输入不回显、不打印；空输入重问；不是 40 位时提醒一次
+ask_cf_token() {
+  local ans=""
+  while :; do
+    echo "请填写 Cloudflare API 令牌："
+    echo "  去 Cloudflare 后台开：My Profile → API Tokens → Create Token → 用“Edit zone DNS”模板，"
+    echo "  只给改 DNS 的权限（Zone:DNS:Edit），不要用 Global API Key。"
+    if [ -t 0 ]; then
+      read -rsp "Cloudflare API 令牌（输入时不显示，粘贴后回车）： " ans || true
+    elif [ -r /dev/tty ]; then
+      read -rsp "Cloudflare API 令牌（输入时不显示，粘贴后回车）： " ans </dev/tty 2>/dev/null || true
+    fi
+    echo ""
+    if [ -z "$ans" ]; then echo "令牌不能为空，请重新输入。"; continue; fi
+    if [ "${#ans}" -ne 40 ]; then echo "提醒：Cloudflare API 令牌一般是 40 位，你填的是 ${#ans} 位，请核对一下（确认无误就继续用，错了证书会签不下来）。"; fi
+    printf -v CLOUDFLARE_API_TOKEN '%s' "$ans"
+    return 0
+  done
+}
+
 # ---------- 端口占用预检（ss -> netstat -> /proc 回退） ----------
 port_in_use() {
   local port="$1"
@@ -101,6 +154,8 @@ echo "== 2/6 域名与端口 =="
 # 端口预设优先级：环境变量 > .env > 交互输入（直接回车用默认）
 ENV_HTTPS_PORT="${HTTPS_PORT:-}"
 ENV_WS_PORT="${WS_PORT:-}"
+ENV_CERT_METHOD="${CERT_METHOD:-}"
+ENV_CF_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 # 优先级：命令行参数 > .env > 环境变量 > 交互输入 > 留空走明文
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
 DOMAIN="${CLI_DOMAIN:-${DOMAIN:-}}"
@@ -112,7 +167,36 @@ if [ -z "$DOMAIN" ]; then
   TLS_MODE=0
   echo "无域名：明文 WS 模式，建议之后补域名重跑以启用 TLS"
 else
+  TLS_MODE=1
   echo "域名：$DOMAIN（TLS 模式）"
+fi
+
+# 证书签发方式（TLS 模式才问）：环境变量 CERT_METHOD > .env > 交互输入（直接回车默认 1）
+if [ "$TLS_MODE" = "1" ]; then
+  CERT_METHOD="${ENV_CERT_METHOD:-${CERT_METHOD:-}}"
+  case "$CERT_METHOD" in
+    1|http) CERT_METHOD="http" ;;
+    2|dns) CERT_METHOD="dns" ;;
+    "")
+      if [ "$DRY_RUN" != "1" ]; then
+        ask_cert_method
+      else
+        CERT_METHOD="http"
+      fi
+      ;;
+    *) echo "CERT_METHOD=$CERT_METHOD 不合法（只能是 1/http 或 2/dns），请修正后重跑。"; exit 1 ;;
+  esac
+  if [ "$CERT_METHOD" = "dns" ]; then echo "证书方式：DNS 验证（Cloudflare）"; else echo "证书方式：默认走 80（HTTP-01）"; fi
+  # DNS 验证要 Cloudflare API 令牌：环境变量 CLOUDFLARE_API_TOKEN > .env > 交互输入
+  # 令牌只存进 .env，绝不在输出里打印；输入时不回显
+  CLOUDFLARE_API_TOKEN="${ENV_CF_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
+  if [ "$CERT_METHOD" = "dns" ] && [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+    if [ "$DRY_RUN" != "1" ]; then
+      ask_cf_token
+    else
+      echo "[dry-run] DNS 验证模式：未预设 CLOUDFLARE_API_TOKEN，.env 里令牌为空（实装时会问）"
+    fi
+  fi
 fi
 
 # 端口：默认 443（TLS）/ 8080（明文），可自定义高位端口避开占用
@@ -122,7 +206,11 @@ if [ "$TLS_MODE" = "1" ]; then
     echo "HTTPS 端口用默认 443 还是自定义？（443 被占时可改高位端口，如 8443、24443）："
     ask_port "HTTPS 端口（默认 443，直接回车就是 443）： " HTTPS_PORT "443"
     while [ "$HTTPS_PORT" = "80" ]; do
-      echo "HTTPS 端口不能填 80（80 要留给 Caddy 签证书验证用），请换一个："
+      if [ "$CERT_METHOD" = "dns" ]; then
+        echo "HTTPS 端口不能填 80（80 是 HTTP 端口，HTTPS 跑在 80 上客户端连不上），请换一个："
+      else
+        echo "HTTPS 端口不能填 80（80 要留给 Caddy 签证书验证用），请换一个："
+      fi
       HTTPS_PORT=""
       ask_port "HTTPS 端口（默认 443，直接回车就是 443）： " HTTPS_PORT "443"
     done
@@ -145,10 +233,13 @@ fi
 echo "端口预检："
 if [ "$DRY_RUN" != "1" ]; then
   if [ "$TLS_MODE" = "1" ]; then
-    if port_in_use 80; then
+    if [ "$CERT_METHOD" = "dns" ]; then
+      echo "DNS 验证模式：80 端口不用空闲（签证书走 DNS 验证），80 被占也不拦。"
+    elif port_in_use 80; then
       echo "80 端口已被占用，TLS 装不了（Caddy 签证书走 HTTP-01 验证必须用 80）："
       port_owner 80
-      echo "建议：换一台 80 空闲的服务器，或不填域名重跑走明文模式。"
+      echo "建议：换一台 80 空闲的服务器，或不填域名重跑走明文模式；"
+      echo "也可以重跑并选 [2] DNS 验证（要 Cloudflare API 令牌），80 被占也能装。"
       exit 1
     fi
     if port_in_use "$HTTPS_PORT"; then
@@ -157,7 +248,11 @@ if [ "$DRY_RUN" != "1" ]; then
       echo "建议：停掉占用它的程序，或重跑并把 HTTPS 端口改成别的（如 8443、24443）。"
       exit 1
     fi
-    echo "80 与 $HTTPS_PORT 端口空闲。"
+    if [ "$CERT_METHOD" = "dns" ]; then
+      echo "$HTTPS_PORT 端口空闲（80 不用查，DNS 验证模式不走 80）。"
+    else
+      echo "80 与 $HTTPS_PORT 端口空闲。"
+    fi
   else
     if port_in_use "$WS_PORT"; then
       echo "$WS_PORT 端口已被占用，装不了："
@@ -231,7 +326,57 @@ cat > config.json <<EOF
 EOF
 
 if [ "$TLS_MODE" = "1" ]; then
-  cat > Caddyfile <<EOF
+  if [ "$CERT_METHOD" = "dns" ]; then
+    # DNS 验证：Caddyfile 加 tls dns cloudflare；令牌走环境变量，不写进 Caddyfile
+    cat > Caddyfile <<EOF
+$DOMAIN:$HTTPS_PORT {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+    handle /$WSPATH {
+        reverse_proxy xray:10000
+    }
+    handle {
+        respond "ok" 200
+    }
+}
+EOF
+    # DNS 验证用现场编译的带插件 Caddy（官方 builder 镜像编）；80 不映射到主机，80 被占也不影响
+    cat > Dockerfile.caddy <<'DCEOF'
+# 带 Cloudflare DNS 插件的 Caddy：官方 caddy:2-builder 现场编，插件源码来自 github.com/caddy-dns/cloudflare
+FROM caddy:2-builder AS builder
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+FROM caddy:2
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+DCEOF
+    cat > docker-compose.yml <<EOF
+services:
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: tiktok-xray
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/usr/local/etc/xray/config.json:ro
+  caddy:
+    image: caddy-cloudflare:latest
+    container_name: tiktok-caddy
+    restart: unless-stopped
+    environment:
+      - CLOUDFLARE_API_TOKEN=\${CLOUDFLARE_API_TOKEN}
+    ports:
+      - "$HTTPS_PORT:$HTTPS_PORT"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - xray
+volumes:
+  caddy_data:
+  caddy_config:
+EOF
+  else
+    cat > Caddyfile <<EOF
 $DOMAIN:$HTTPS_PORT {
     handle /$WSPATH {
         reverse_proxy xray:10000
@@ -241,7 +386,7 @@ $DOMAIN:$HTTPS_PORT {
     }
 }
 EOF
-  cat > docker-compose.yml <<EOF
+    cat > docker-compose.yml <<EOF
 services:
   xray:
     image: ghcr.io/xtls/xray-core:latest
@@ -266,6 +411,7 @@ volumes:
   caddy_data:
   caddy_config:
 EOF
+  fi
 else
   cat > docker-compose.yml <<EOF
 services:
@@ -367,22 +513,42 @@ EOF
 fi
 SUB=$(printf '%s' "$LINK" | base64 -w0)
 
-# 安装记录：端口、域名、WS 路径写进 .env，供 check.sh / stop.sh 读实际端口（重跑时默认沿用上次的）
+# 安装记录：端口、域名、WS 路径、证书方式写进 .env，供 check.sh / stop.sh 读实际端口与方式（重跑时默认沿用上次的）
+# .env 里有 Cloudflare API 令牌时只限本机 root 读（600），绝不在输出里打印
 {
   echo "# tiktok-node 安装记录（install.sh 生成；重跑时域名与端口默认沿用上次的）"
   echo "DOMAIN=$DOMAIN"
   echo "TLS_MODE=$TLS_MODE"
-  if [ "$TLS_MODE" = "1" ]; then echo "HTTPS_PORT=$HTTPS_PORT"; else echo "WS_PORT=$WS_PORT"; fi
+  if [ "$TLS_MODE" = "1" ]; then
+    echo "HTTPS_PORT=$HTTPS_PORT"
+    echo "CERT_METHOD=$CERT_METHOD"
+    if [ "$CERT_METHOD" = "dns" ]; then echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"; fi
+  else
+    echo "WS_PORT=$WS_PORT"
+  fi
   echo "SERVER_IP=$SERVER_IP"
   echo "WSPATH=$WSPATH"
 } > .env
+chmod 600 .env
 
 echo "== 6/6 启动并拨测 =="
 if [ "$DRY_RUN" != "1" ]; then
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    if [ "$TLS_MODE" = "1" ]; then ufw allow 80/tcp >/dev/null; ufw allow "$HTTPS_PORT"/tcp >/dev/null;
+    if [ "$TLS_MODE" = "1" ]; then
+      if [ "$CERT_METHOD" = "http" ]; then ufw allow 80/tcp >/dev/null; fi
+      ufw allow "$HTTPS_PORT"/tcp >/dev/null
     else ufw allow "$WS_PORT"/tcp >/dev/null; fi
     echo "ufw 已放行对应端口"
+  fi
+  # DNS 验证模式：先编带 Cloudflare 插件的 Caddy（官方 builder 镜像现场编，只编一次；已有镜像就跳过）
+  if [ "$TLS_MODE" = "1" ] && [ "$CERT_METHOD" = "dns" ]; then
+    if docker image inspect caddy-cloudflare:latest >/dev/null 2>&1; then
+      echo "已找到本地 caddy-cloudflare 镜像，跳过编译"
+    else
+      echo "正在编译带 Cloudflare 插件的 Caddy（官方 builder 镜像现场编，第一次约 1-3 分钟）..."
+      docker build -t caddy-cloudflare:latest -f Dockerfile.caddy . || { echo "Caddy 编译失败：检查本机能否访问 Docker Hub 与 proxy.golang.org，或稍后重跑"; exit 1; }
+      echo "Caddy 编译完成：caddy-cloudflare:latest"
+    fi
   fi
   # --force-recreate：重跑脚本换了 UUID/路径时，旧容器必须重建才生效
   docker compose up -d --force-recreate
@@ -433,6 +599,13 @@ fi
 
 echo ""
 echo "================ 部署完成 ================"
+if [ "$TLS_MODE" = "1" ]; then
+  if [ "$CERT_METHOD" = "dns" ]; then
+    echo "证书方式：DNS 验证（Cloudflare），续签全自动，不用管 80 端口"
+  else
+    echo "证书方式：默认走 80（HTTP-01）；证书剩余天数用 bash check.sh 看"
+  fi
+fi
 echo "节点链接（小火箭/Clash 可直接导入）："
 echo "$LINK"
 echo ""
@@ -460,7 +633,7 @@ pass() { echo "  [通过] $1"; }
 warn() { echo "  [注意] $1"; }
 fail() { echo "  [风险] $1"; }
 
-echo "== 1/6 节点 IP 与地区 =="
+echo "== 1/7 节点 IP 与地区 =="
 IPJSON="$(curl -s --max-time 10 "https://ip-api.org/json/" || true)"
 if [ -z "$IPJSON" ]; then
   warn "ip-api.org 查不到，改用 ipinfo.io"
@@ -495,7 +668,7 @@ else
 fi
 
 echo ""
-echo "== 2/6 IPv6 是否禁用 =="
+echo "== 2/7 IPv6 是否禁用 =="
 V6="$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "?")"
 if [ "$V6" = "1" ]; then
   pass "IPv6 已禁用（disable_ipv6=1）"
@@ -510,7 +683,7 @@ else
 fi
 
 echo ""
-echo "== 3/6 DNS 解析路径 =="
+echo "== 3/7 DNS 解析路径 =="
 if command -v dig >/dev/null 2>&1; then
   RESOLVER="$(dig +short whoami.akamai.net @1.1.1.1 2>/dev/null | head -1)"
   [ -n "$RESOLVER" ] && echo "  经 1.1.1.1 解析的出口解析器 IP：$RESOLVER（应为 Cloudflare 的 IP，非国内运营商）"
@@ -521,7 +694,7 @@ fi
 echo "  xray 已配置 DoH(1.1.1.1/8.8.8.8)+TCP 兜底、只解析 IPv4，服务端不再走明文 UDP 53"
 
 echo ""
-echo "== 4/6 TikTok 可达性（从节点 IP 出口测） =="
+echo "== 4/7 TikTok 可达性（从节点 IP 出口测） =="
 TT_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://www.tiktok.com/" || true)"
 API_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://api16-normal-c-useast1a.tiktokv.com/" || true)"
 echo "  tiktok.com -> HTTP $TT_CODE"
@@ -533,7 +706,7 @@ else
 fi
 
 echo ""
-echo "== 5/6 手机端自查（在手机上开着节点做） =="
+echo "== 5/7 手机端自查（在手机上开着节点做） =="
 echo "  节点只能管服务端这一半，手机端泄漏要这样验："
 echo "  1) 打开 https://www.dnsleaktest.com 点 Extended test："
 echo "     全部 DNS 服务器 IP 应该都是节点所在国家/机房的，出现中国运营商 DNS = 泄漏"
@@ -542,7 +715,7 @@ echo "     不能出现你的真实 IP、不能出现 IPv6 地址、时区/语�
 echo "  3) TikTok 里刷几个视频再看个人主页地区：应与节点地区一致"
 echo "  4) 手机设置核对（见 README）：已拔国内 SIM 卡、时区语言=节点地区、定位已关"
 echo ""
-echo "== 6/6 节点端口连通性 =="
+echo "== 6/7 节点端口连通性 =="
 # 读安装记录（install.sh 写下的实际端口），没有就读 clash.yaml，再没有回退默认
 CK_DIR="$(cd "$(dirname "$0")" && pwd)"
 CK_TLS=""; CK_PORT=""; CK_HOST=""; CK_PATH=""; CK_PROTO="http"
@@ -579,6 +752,51 @@ else
   CK_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$CK_PROTO://$CK_HOST:$CK_PORT/" || true)"
   echo "  首页 -> HTTP $CK_CODE"
   if [ "$CK_CODE" = "200" ]; then pass "节点端口 $CK_PORT 可达"; else fail "节点端口 $CK_PORT 不可达（HTTP $CK_CODE）"; fi
+fi
+
+echo ""
+echo "== 7/7 证书与续签 =="
+# 证书方式与到期天数：从 .env 读（install.sh 写下）；TLS 模式才有证书
+if [ "${TLS_MODE:-}" != "1" ]; then
+  echo "  明文模式，没有证书（补域名重跑 install.sh 可升级 TLS）"
+else
+  if [ "${CERT_METHOD:-http}" = "dns" ]; then
+    echo "  证书方式：DNS 验证（Cloudflare），续签全自动，不用管 80 端口"
+  else
+    echo "  证书方式：默认走 80（HTTP-01），续签要走 80 端口"
+    echo "  注意：如果域名现在指向中转、且 80 没转到这台机，续签会失败，见 README“手动续签”一节"
+  fi
+  if [ -n "${DOMAIN:-}" ]; then
+    CK_HTTPS="${HTTPS_PORT:-443}"
+    if command -v openssl >/dev/null 2>&1; then
+      CERT_END="$(timeout 10 openssl s_client -connect "127.0.0.1:$CK_HTTPS" -servername "$DOMAIN" </dev/null 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+      if [ -n "$CERT_END" ]; then
+        CERT_END_EPOCH="$(date -d "$CERT_END" +%s 2>/dev/null || echo "")"
+        NOW_EPOCH="$(date +%s)"
+        if [ -n "$CERT_END_EPOCH" ]; then
+          CERT_DAYS="$(( (CERT_END_EPOCH - NOW_EPOCH) / 86400 ))"
+          echo "  证书到期日：$CERT_END（剩余约 $CERT_DAYS 天）"
+          if [ "$CERT_DAYS" -lt 0 ]; then
+            fail "证书已过期 $(( -CERT_DAYS )) 天！节点已不可用，立即按 README“手动续签”处理"
+          elif [ "$CERT_DAYS" -le 14 ]; then
+            warn "证书 14 天内到期；Caddy 会在到期前 30 天内自动续签，到期还没续上就按 README“手动续签”处理"
+          elif [ "$CERT_DAYS" -le 30 ]; then
+            pass "证书剩余 $CERT_DAYS 天，Caddy 会自动续签"
+          else
+            pass "证书剩余 $CERT_DAYS 天，Caddy 会在到期前 30 天内自动续签"
+          fi
+        else
+          warn "读到证书但解析不到期日：$CERT_END"
+        fi
+      else
+        warn "读不到证书（Caddy 可能没起来，或证书还没签好）；等几分钟再跑 check.sh"
+      fi
+    else
+      warn "本机无 openssl，看不到证书剩余天数（apt install openssl 可装）"
+    fi
+  else
+    warn "没找到域名（.env 不在），看不到证书剩余天数"
+  fi
 fi
 
 echo ""
