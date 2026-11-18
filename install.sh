@@ -319,6 +319,11 @@ gen_compose() {
       echo "    image: ghcr.io/xtls/xray-core:latest"
       echo "    container_name: $ctr"
       echo "    restart: unless-stopped"
+      echo "    logging:"
+      echo "      driver: json-file"
+      echo "      options:"
+      echo "        max-size: \"10m\""
+      echo "        max-file: \"3\""
       if [ "$tls_mode" = "0" ]; then
         wsp="$(node_field "$i" WS_PORT)"
         echo "    ports:"
@@ -338,6 +343,11 @@ gen_compose() {
       fi
       echo "    container_name: tiktok-caddy"
       echo "    restart: unless-stopped"
+      echo "    logging:"
+      echo "      driver: json-file"
+      echo "      options:"
+      echo "        max-size: \"10m\""
+      echo "        max-file: \"3\""
       if [ "$cm" = "dns" ]; then
         echo "    environment:"
         echo '      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}'

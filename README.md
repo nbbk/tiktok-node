@@ -163,6 +163,12 @@ TikTok 从 IP、DNS、时区、SIM 卡几个地方一起判断地区，节点配
   （端口是安装时选的 HTTPS 端口，默认 443；用默认端口时 `:443` 可省略）返回 `101` = 正常；返回 `200 ok` = Caddy 没把请求转给 xray，跑 `docker compose down && docker compose up -d` 重建容器再测；返回 `400` = xray 拒绝握手，核对手机上的 UUID 和 WS 路径跟 config.json 是否一致。
 - **Caddy 拿不到证书**：走 80 方式时核对域名 A 记录指到本机 IP、云厂商安全组放行 80 和 HTTPS 端口、**80 端口没有被别的程序占**；选 DNS 验证时核对 Cloudflare 令牌没错、权限够（Zone:DNS:Edit）、域名 DNS 确实在 Cloudflare；看日志 `docker logs tiktok-caddy --tail 20`。
 
+## 日志上限（防爆盘）
+
+- 每个容器（xray、caddy）的日志都有限制：单个文件最多 10MB、最多留 3 份，写满自动轮转，不会像没上限的 json 日志那样一直长到撑爆磁盘。
+- **限制只对重建后的容器生效**：已经在跑的容器要重建一次才限流——在节点目录里跑 `docker compose down && docker compose up -d`（配置不动，只重建容器），或重跑安装命令。
+- 定期看一眼各容器日志占了多少：`docker system df`，或 `du -sh /var/lib/docker/containers/* | sort -rh | head`。
+
 ## 停止 / 删除节点
 
 - **停止（保留配置，可再启动）**：在节点目录里跑 `bash stop.sh`，会停掉**全部节点**的容器并检查实际用的端口（按 `nodes.conf` 里的记录；旧版单节点按 `.env` 里的记录，默认 80/443/8080）是否已释放；再启动跑 `docker compose up -d`。远程一键（不用先下载）：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash`
