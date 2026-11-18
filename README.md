@@ -34,6 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | 
 
 也可以把域名直接跟在命令后面（比如 `... | bash -s example.com`）。换服务器、换地区时不用改脚本：域名先解析到新服务器，再跑同一条命令、输入新域名即可；每次运行都会生成新的 UUID 和 WS 路径，每个服务器一套独立的节点。
 
+**重跑会换掉第一个节点**：不带参数重跑 `install.sh` 只换第一个节点的 UUID 和 WS 路径（旧链接失效），已追加的第 2 个及以后节点不受影响。要在一台机上再加一个节点不要重跑，用下面的“多节点”方法（`--add-node`）。
+
 **自定义端口**：安装时会问 HTTPS 端口（TLS 模式）或 WS 端口（明文模式），直接回车用默认（443 / 8080）；默认端口被占就填个高位端口，如 8443、24443、30000。也可以提前预设好，安装时不再问：
 
 ```
@@ -66,6 +68,58 @@ CERT_METHOD=dns CLOUDFLARE_API_TOKEN=你的令牌 curl -fsSL https://raw.githubu
 ```
 
 选 DNS 验证后 80 的变化：Caddy 不再把 80 映射到主机，80 被别的程序占着也不影响安装和续签；Caddy 容器会换成现场编译的带 Cloudflare 插件版本（官方 builder 镜像编，第一次约 1-3 分钟，之后复用），证书续签全自动。
+
+## 多节点（一台落地机多个节点）
+
+一台落地机可以跑多个节点，每个节点一个子域名、自己的 UUID 和 WS 路径，手机上当成几个独立节点导入。多个节点共用一个 Caddy 的 443 端口，Caddy 按域名（Host/SNI）分流到各自的 xray 后端。
+
+### 泛域名解析（一次配好）
+
+每个节点一个子域名，比如 `us1.example.com`、`us2.example.com`、`us3.example.com`，都指向同一台落地机。最省事是加一条泛域名 A 记录：
+
+- 主机记录：`*`，记录类型：`A`，记录值：落地机 IP（例如 203.0.113.1）
+
+加完之后任意子域名都自动指向这台机，以后加节点不用再改 DNS。也可以每个子域名单独加一条 A 记录，效果一样，就是每次加节点都要多改一次。
+
+### 追加节点
+
+两种办法：
+
+1. **装完直接加**：第一个节点装完会问“还要再加一个节点吗？[y/N，默认 N]”，回 `y` 就接着装下一个，再问、再加，可以一直加下去。
+2. **事后追加**：在节点目录里跑：
+
+   ```
+   bash install.sh --add-node
+   ```
+
+   也可以把新子域名直接跟在后面，省一次输入：`bash install.sh --add-node us2.example.com`
+
+追加节点只会问新节点的事（子域名、端口），**不会覆盖已有节点**，也不会重问证书方式：追加沿用第一次安装选的证书方式。
+
+### 证书两种方式（追加时怎么走）
+
+- **默认走 80（HTTP-01）**：每个子域名 Caddy 单独签一张证书。加节点前确认新子域名的 A 记录已经指向这台落地机（泛域名配好就不用管），Caddy 追加后自动签，签好新节点才上线。
+- **DNS 验证（Cloudflare，DNS-01）**：一张泛域名证书 `*.example.com` 通吃所有子域名，签一次就够，加节点不用再签、不用改 DNS、80 也不用空闲。
+
+### 中转侧不用动
+
+同一台落地机的多个节点共用中转一条 443 转发，靠域名区分：中转的 relay.conf 里这台落地机还是一条规则，域名指向中转机后，`us1.example.com` 和 `us2.example.com` 的流量都走同一条转发，到落地后 Caddy 再按域名分给各自的 xray。**不用给第二个节点再加中转规则**，也不用改中转配置。
+
+### 续签说明
+
+证书还是 Let's Encrypt 90 天，Caddy 到期前 30 天内自动续签。默认走 80 方式时续签要走 80 端口验证：如果域名现在指向中转机、80 又没转到这台落地机，续签会失败，见上面“手动续签”一节（每个节点都要单独续，续哪个就把哪个子域名的 A 记录临时改回落地机）。选 DNS 验证的节点续签全自动，不用管。
+
+### 删除单个节点
+
+```
+bash install.sh --del-node
+```
+
+会列出全部节点让你选一个（也可以直接传域名：`bash install.sh --del-node us2.example.com`）。删除前会显示该节点的域名和 UUID 做二次确认（[y/N]，默认 N），确认后删除该节点的 xray 容器、Caddyfile 里对应的配置段、节点记录，然后 reload Caddy；其他节点不受影响，删除后脚本会逐个核查剩余节点仍正常（端口监听、WS 握手）。删除时会把被删节点的信息打印出来，方便你留底。`bash stop.sh` 还是全停全删，不动单个节点。
+
+### 明文模式（没有域名）
+
+没有域名也能追加节点：追加时不用填域名，各节点用不同的 WS 端口（默认在前一个节点端口上加 1，比如 8080、8081；也可以自己填）。证书那一节不适用，明文节点没有证书。
 
 ## 手动续签（证书快到期、自动续签失败时）
 
@@ -111,8 +165,9 @@ TikTok 从 IP、DNS、时区、SIM 卡几个地方一起判断地区，节点配
 
 ## 停止 / 删除节点
 
-- **停止（保留配置，可再启动）**：在节点目录里跑 `bash stop.sh`，会停掉容器并检查实际用的端口（按 `.env` 里的记录，默认 80/443/8080）是否已释放；再启动跑 `docker compose up -d`。远程一键（不用先下载）：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash`
-- **彻底删除**：`bash stop.sh --remove`，会删容器、数据卷、配置目录，并恢复 IPv6（删 `/etc/sysctl.d/99-tiktok-node.conf`）。远程一键：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash -s -- --remove`
+- **停止（保留配置，可再启动）**：在节点目录里跑 `bash stop.sh`，会停掉**全部节点**的容器并检查实际用的端口（按 `nodes.conf` 里的记录；旧版单节点按 `.env` 里的记录，默认 80/443/8080）是否已释放；再启动跑 `docker compose up -d`。远程一键（不用先下载）：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash`
+- **删除单个节点**：`bash install.sh --del-node`，只删选中的一个节点，其他节点不受影响（见“多节点”一节）。
+- **彻底删除**：`bash stop.sh --remove`，会删**全部节点**的容器、数据卷、配置目录，并恢复 IPv6（删 `/etc/sysctl.d/99-tiktok-node.conf`）。远程一键：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash -s -- --remove`
 - **手动停**：`docker compose down`（保留配置）或 `docker compose down -v`（连数据卷一起删）
 - stop.sh 停完会逐个检查端口：如果某个端口仍被占用，会直接列出占用它的进程，照着处理就行；如果占用它的是别的程序，先停掉那个程序或换一台服务器。
 
