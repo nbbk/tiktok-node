@@ -8,7 +8,16 @@ pass() { echo "  [通过] $1"; }
 warn() { echo "  [注意] $1"; }
 fail() { echo "  [风险] $1"; }
 
-echo "== 1/7 节点 IP 与地区 =="
+# section 标题：统一分节横幅（前空一行，60 列分隔线，标题独占一行，再分隔线，后空一行）
+section() {
+  echo ""
+  echo "============================================================"
+  echo "  $1"
+  echo "============================================================"
+  echo ""
+}
+
+section "1/7 节点 IP 与地区"
 IPJSON="$(curl -s --max-time 10 "https://ip-api.org/json/" || true)"
 if [ -z "$IPJSON" ]; then
   warn "ip-api.org 查不到，改用 ipinfo.io"
@@ -31,8 +40,8 @@ print(f"  节点 IP：{ip}")
 print(f"  地区：{country} {cc} / {city}")
 print(f"  运营商/机房：{isp}")
 if hosting is True:
-    print("  [风险] 这是机房 IP（hosting=true）。TikTok 对机房 IP 风控更严，")
-    print("        容易限流/0播放。如果之后播放量异常，优先换住宅/ISP 的干净 IP。")
+    print("  [风险] 机房 IP（hosting=true），TikTok 风控更严，容易限流/0播放")
+    print("       如果之后播放量异常，优先换住宅/ISP 的干净 IP。")
 elif hosting is False:
     print("  [通过] 看起来是住宅/ISP IP（hosting=false），TikTok 风控相对友好。")
 else:
@@ -42,13 +51,13 @@ else
   echo "  原始结果：$IPJSON"
 fi
 
-echo ""
-echo "== 2/7 IPv6 是否禁用 =="
+section "2/7 IPv6 是否禁用"
 V6="$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "?")"
 if [ "$V6" = "1" ]; then
   pass "IPv6 已禁用（disable_ipv6=1）"
 else
-  fail "IPv6 未禁用（disable_ipv6=$V6）。跑 install.sh 时会自动禁用；手动执行："
+  fail "IPv6 未禁用（disable_ipv6=$V6），install.sh 会自动禁用"
+  echo "       手动执行："
   echo "       echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.d/99-tiktok-node.conf && sysctl -p"
 fi
 if ip -6 addr show scope global 2>/dev/null | grep -q "inet6"; then
@@ -57,8 +66,7 @@ else
   pass "本机无全局 IPv6 地址"
 fi
 
-echo ""
-echo "== 3/7 DNS 解析路径 =="
+section "3/7 DNS 解析路径"
 if command -v dig >/dev/null 2>&1; then
   RESOLVER="$(dig +short whoami.akamai.net @1.1.1.1 2>/dev/null | head -1)"
   [ -n "$RESOLVER" ] && echo "  经 1.1.1.1 解析的出口解析器 IP：$RESOLVER（应为 Cloudflare 的 IP，非国内运营商）"
@@ -68,8 +76,7 @@ else
 fi
 echo "  xray 已配置 DoH(1.1.1.1/8.8.8.8)+TCP 兜底、只解析 IPv4，服务端不再走明文 UDP 53"
 
-echo ""
-echo "== 4/7 TikTok 可达性（从节点 IP 出口测） =="
+section "4/7 TikTok 可达性（从节点 IP 出口测）"
 TT_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://www.tiktok.com/" || true)"
 API_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://api16-normal-c-useast1a.tiktokv.com/" || true)"
 echo "  tiktok.com -> HTTP $TT_CODE"
@@ -80,17 +87,17 @@ else
   fail "TikTok 主站从节点 IP 不可达（HTTP $TT_CODE），检查节点 IP 是否被 TikTok 拉黑或出站被墙"
 fi
 
-echo ""
-echo "== 5/7 手机端自查（在手机上开着节点做） =="
+section "5/7 手机端自查（在手机上开着节点做）"
 echo "  节点只能管服务端这一半，手机端泄漏要这样验："
-echo "  1) 打开 https://www.dnsleaktest.com 点 Extended test："
-echo "     全部 DNS 服务器 IP 应该都是节点所在国家/机房的，出现中国运营商 DNS = 泄漏"
-echo "  2) 打开 https://browserleaks.com/ip："
-echo "     不能出现你的真实 IP、不能出现 IPv6 地址、时区/语言要和节点地区一致"
-echo "  3) TikTok 里刷几个视频再看个人主页地区：应与节点地区一致"
-echo "  4) 手机设置核对（见 README）：已拔国内 SIM 卡、时区语言=节点地区、定位已关"
-echo ""
-echo "== 6/7 节点端口连通性 =="
+echo "  1) 打开 https://www.dnsleaktest.com，点 Extended test"
+echo "     全部 DNS 服务器 IP 应是节点所在国家/机房的，出现中国运营商 DNS = 泄漏"
+echo "  2) 打开 https://browserleaks.com/ip"
+echo "     不能出现你的真实 IP，不能出现 IPv6 地址，时区/语言要和节点地区一致"
+echo "  3) TikTok 里刷几个视频，再看个人主页地区"
+echo "     应与节点地区一致"
+echo "  4) 手机设置核对（见 README）"
+echo "     已拔国内 SIM 卡，时区语言=节点地区，定位已关"
+section "6/7 节点端口连通性"
 # 节点列表：有 nodes.conf 时逐节点读（install.sh --add-node 维护）；没有就按旧版单节点（.env / clash.yaml）读
 CK_DIR="$(cd "$(dirname "$0")" && pwd)"
 CK_REG="$CK_DIR/nodes.conf"
@@ -115,9 +122,11 @@ ck_ws_handshake() {  # ck_ws_handshake 节点名 协议 地址 端口 路径
   elif [ "$code" = "400" ]; then
     pass "节点 $name：WS 端口已响应（400 = xray 已响应，正常）"
   elif [ "$code" = "200" ]; then
-    fail "节点 $name：WS 握手返回 200：Caddy 没把请求转给 xray，跑 docker compose down && docker compose up -d 重建"
+    fail "节点 $name：WS 握手返回 200，Caddy 没把请求转给 xray"
+    echo "       重建：docker compose down && docker compose up -d"
   else
-    fail "节点 $name：WS 握手无响应（HTTP $code）：检查端口 $port 是否放行、容器是否在跑"
+    fail "节点 $name：WS 握手无响应（HTTP $code）"
+    echo "       检查端口 $port 是否放行、容器是否在跑"
   fi
 }
 if [ -f "$CK_REG" ]; then
@@ -152,7 +161,8 @@ else
     [ -n "$CK_PORT" ] || CK_PORT=443
   fi
   if [ -z "$CK_HOST" ] || [ -z "$CK_PORT" ]; then
-    warn "没找到节点端口记录（.env / clash.yaml 都不在），跳过端口自检；按默认端口 443（TLS）/ 8080（明文）核对即可"
+    warn "没找到节点端口记录（.env / clash.yaml 都不在），跳过端口自检"
+    echo "       按默认端口 443（TLS）/ 8080（明文）核对即可"
   elif [ -n "$CK_PATH" ] && [ "$CK_PATH" != "/" ]; then
     ck_ws_handshake "节点 1" "$CK_PROTO" "$CK_HOST" "$CK_PORT" "${CK_PATH#/}"
   else
@@ -163,8 +173,7 @@ else
   fi
 fi
 
-echo ""
-echo "== 7/7 证书与续签 =="
+section "7/7 证书与续签"
 # 证书方式与到期天数：TLS 节点逐个查；有 nodes.conf 时逐节点读，没有就按旧版单节点（.env）读
 ck_cert_days() {  # ck_cert_days 节点名 域名 HTTPS端口 证书方式
   local name="$1" dom="$2" hp="$3" cm="$4"
@@ -172,7 +181,8 @@ ck_cert_days() {  # ck_cert_days 节点名 域名 HTTPS端口 证书方式
     echo "  节点 $name（$dom）：证书方式 DNS 验证（Cloudflare），续签全自动，不用管 80 端口"
   else
     echo "  节点 $name（$dom）：证书方式默认走 80（HTTP-01），续签要走 80 端口"
-    echo "  注意：如果域名现在指向中转、且 80 没转到这台机，续签会失败，见 README“手动续签”一节"
+    warn "如果域名现在指向中转、且 80 没转到这台机，续签会失败"
+    echo "       见 README“手动续签”一节"
   fi
   if command -v openssl >/dev/null 2>&1; then
     local end="" end_epoch="" now_epoch="" days=""
@@ -184,9 +194,11 @@ ck_cert_days() {  # ck_cert_days 节点名 域名 HTTPS端口 证书方式
         days="$(( (end_epoch - now_epoch) / 86400 ))"
         echo "  证书到期日：$end（剩余约 $days 天）"
         if [ "$days" -lt 0 ]; then
-          fail "节点 $name：证书已过期 $(( -days )) 天！节点已不可用，立即按 README“手动续签”处理"
+          fail "节点 $name：证书已过期 $(( -days )) 天，节点已不可用"
+          echo "       立即按 README“手动续签”处理"
         elif [ "$days" -le 14 ]; then
-          warn "节点 $name：证书 14 天内到期；Caddy 会在到期前 30 天内自动续签，到期还没续上就按 README“手动续签”处理"
+          warn "节点 $name：证书 14 天内到期，Caddy 会在到期前 30 天内自动续签"
+          echo "       到期还没续上就按 README“手动续签”处理"
         elif [ "$days" -le 30 ]; then
           pass "节点 $name：证书剩余 $days 天，Caddy 会自动续签"
         else
@@ -222,7 +234,8 @@ else
     echo "  证书方式：DNS 验证（Cloudflare），续签全自动，不用管 80 端口"
   else
     echo "  证书方式：默认走 80（HTTP-01），续签要走 80 端口"
-    echo "  注意：如果域名现在指向中转、且 80 没转到这台机，续签会失败，见 README“手动续签”一节"
+    warn "如果域名现在指向中转、且 80 没转到这台机，续签会失败"
+    echo "       见 README“手动续签”一节"
   fi
   if [ -n "${DOMAIN:-}" ]; then
     ck_cert_days "节点 1" "${DOMAIN:-}" "${HTTPS_PORT:-443}" "${CERT_METHOD:-http}"
@@ -231,5 +244,4 @@ else
   fi
 fi
 
-echo ""
-echo "自检完成。"
+section "自检完成"
