@@ -50,8 +50,15 @@ port_in_use() {
 
 echo ""
 echo "端口检查："
+# 按安装记录（.env）里的实际端口查，没有记录回退默认 80/443/8080
+CHECK_PORTS="80 443 8080"
+if [ -n "$COMPOSE_DIR" ] && [ -f "$COMPOSE_DIR/.env" ]; then
+  set -a; . "$COMPOSE_DIR/.env" 2>/dev/null; set +a
+  if [ "${TLS_MODE:-}" = "1" ]; then CHECK_PORTS="80 ${HTTPS_PORT:-443}";
+  elif [ "${TLS_MODE:-}" = "0" ]; then CHECK_PORTS="${WS_PORT:-8080}"; fi
+fi
 STILL_HELD=""
-for p in 80 443 8080; do
+for p in $CHECK_PORTS; do
   if port_in_use "$p"; then
     echo "  端口 $p 仍被占用："
     if command -v ss >/dev/null 2>&1; then
@@ -71,7 +78,7 @@ if [ -n "$STILL_HELD" ]; then
   echo "  docker rm -f <容器名>"
   echo "如果是别的程序占了这些端口，需要先停掉那个程序，或换一台服务器。"
 else
-  echo "端口 80/443/8080 已全部释放，装新节点不会再报端口占用。"
+  echo "端口 $CHECK_PORTS 已全部释放，装新节点不会再报端口占用。"
 fi
 
 # ---------- 3. 彻底删除时清理系统改动与目录 ----------
