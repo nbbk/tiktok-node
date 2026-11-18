@@ -126,13 +126,14 @@ ask_cert_method() {
   done
 }
 
-# Cloudflare API 令牌：输入不回显、不打印；空输入重问；不是 40 位时提醒一次
+# Cloudflare API 令牌：输入不回显、不打印；空输入重问；格式不对时提醒一次（新版 cfut_ 开头、旧版 40 位都接受）
 ask_cf_token() {
   local ans=""
   while :; do
     echo "请填写 Cloudflare API 令牌："
     echo "  去 Cloudflare 后台开：My Profile → API Tokens → Create Token → 用“Edit zone DNS”模板，"
     echo "  只给改 DNS 的权限（Zone:DNS:Edit），不要用 Global API Key。"
+    echo "  详细步骤见 CLOUDFLARE_TOKEN.md（新版令牌以 cfut_ 开头）。"
     if [ -t 0 ]; then
       read -rsp "Cloudflare API 令牌（输入时不显示，粘贴后回车）： " ans || true
     elif [ -r /dev/tty ]; then
@@ -140,7 +141,11 @@ ask_cf_token() {
     fi
     echo ""
     if [ -z "$ans" ]; then echo "令牌不能为空，请重新输入。"; continue; fi
-    if [ "${#ans}" -ne 40 ]; then echo "提醒：Cloudflare API 令牌一般是 40 位，你填的是 ${#ans} 位，请核对一下（确认无误就继续用，错了证书会签不下来）。"; fi
+    # 新版令牌以 cfut_ 开头，旧版是 40 位十六进制；两者都接受，格式不对只提醒、不拦
+    case "$ans" in
+      cfut_*) ;;
+      *) if [ "${#ans}" -ne 40 ]; then echo "提醒：新版令牌以 cfut_ 开头，旧版是 40 位；你填的是 ${#ans} 位，请核对一下（确认无误就继续用，错了证书会签不下来）。"; fi ;;
+    esac
     printf -v CLOUDFLARE_API_TOKEN '%s' "$ans"
     return 0
   done
