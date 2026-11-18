@@ -15,8 +15,9 @@
 ## 前置条件
 
 - 一台墙外服务器（你机场现有的机器就行），Ubuntu/Debian，root 权限
-- 一个域名，已解析（A 记录）到这台机器，80/443 端口放行——**有域名强烈建议用**，Caddy 会自动签 TLS 证书
-  - 没有域名也能跑：直接回车跳过，用 IP + 8080 明文 WS（能用，但不如 TLS 隐蔽，之后补域名重跑即可升级）
+- 一个域名，已解析（A 记录）到这台机器，**80 端口必须空闲**（Caddy 签证书走 HTTP-01 验证必须用 80；80 被占 TLS 装不了）；443 端口放行——**有域名强烈建议用**，Caddy 会自动签 TLS 证书
+  - **端口可以自定义**：HTTPS 端口默认 443、明文 WS 端口默认 8080；默认端口被占时安装会让你改一个高位端口（如 8443、24443、30000），直接回车就是默认值
+  - 没有域名也能跑：直接回车跳过，用 IP + 明文 WS（默认 8080，可改高位端口；能用，但不如 TLS 隐蔽，之后补域名重跑即可升级）
 - 服务器地区 = 你要做的 TikTok 地区（美区、东南亚、英国……），**节点 IP 的地区必须和运营地区一致**，否则直接限流
 - IP 尽量干净：住宅/ISP 的 IP 最好；机房 IP 也能跑，但 TikTok 风控更严，`check.sh` 会告诉你当前 IP 是不是机房 IP
 
@@ -31,6 +32,15 @@ curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | 
 ```
 
 也可以把域名直接跟在命令后面（比如 `... | bash -s yinni.930327.xyz`）。换服务器、换地区时不用改脚本：域名先解析到新服务器，再跑同一条命令、输入新域名即可；每次运行都会生成新的 UUID 和 WS 路径，每个服务器一套独立的节点。
+
+**自定义端口**：安装时会问 HTTPS 端口（TLS 模式）或 WS 端口（明文模式），直接回车用默认（443 / 8080）；默认端口被占就填个高位端口，如 8443、24443、30000。也可以提前预设好，安装时不再问：
+
+```
+HTTPS_PORT=8443 curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/install.sh | bash -s yinni.930327.xyz
+WS_PORT=9080 bash install.sh
+```
+
+注意：**80 端口必须空闲**，Caddy 签证书走 HTTP-01 验证必须用 80；如果 80 被占，TLS 装不了，要么换一台服务器，要么不填域名走明文模式。
 
 ### 本地安装（传包）
 
@@ -64,19 +74,19 @@ TikTok 从 IP、DNS、时区、SIM 卡几个地方一起判断地区，节点配
 ## 排障
 
 - **节点没网、手机全打不开**：先在服务器上测 WS 握手（装完脚本会自动测）：
-  `curl -s -i -N --max-time 10 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" https://你的域名/WS路径`
-  返回 `101` = 正常；返回 `200 ok` = Caddy 没把请求转给 xray，跑 `docker compose down && docker compose up -d` 重建容器再测；返回 `400` = xray 拒绝握手，核对手机上的 UUID 和 WS 路径跟 config.json 是否一致。
-- **Caddy 拿不到证书**：核对域名 A 记录指到本机 IP、云厂商安全组放行 80/443；看日志 `docker logs tiktok-caddy --tail 20`。
+  `curl -s -i -N --max-time 10 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -H "Sec-WebSocket-Version: 13" https://你的域名:端口/WS路径`
+  （端口是安装时选的 HTTPS 端口，默认 443；用默认端口时 `:443` 可省略）返回 `101` = 正常；返回 `200 ok` = Caddy 没把请求转给 xray，跑 `docker compose down && docker compose up -d` 重建容器再测；返回 `400` = xray 拒绝握手，核对手机上的 UUID 和 WS 路径跟 config.json 是否一致。
+- **Caddy 拿不到证书**：核对域名 A 记录指到本机 IP、云厂商安全组放行 80 和 HTTPS 端口、**80 端口没有被别的程序占**；看日志 `docker logs tiktok-caddy --tail 20`。
 
 ## 停止 / 删除节点
 
-- **停止（保留配置，可再启动）**：在节点目录里跑 `bash stop.sh`，会停掉容器并检查 80/443/8080 是否已释放；再启动跑 `docker compose up -d`。远程一键（不用先下载）：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash`
+- **停止（保留配置，可再启动）**：在节点目录里跑 `bash stop.sh`，会停掉容器并检查实际用的端口（按 `.env` 里的记录，默认 80/443/8080）是否已释放；再启动跑 `docker compose up -d`。远程一键（不用先下载）：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash`
 - **彻底删除**：`bash stop.sh --remove`，会删容器、数据卷、配置目录，并恢复 IPv6（删 `/etc/sysctl.d/99-tiktok-node.conf`）。远程一键：`curl -fsSL https://raw.githubusercontent.com/nbbk/tiktok-node/main/stop.sh | bash -s -- --remove`
 - **手动停**：`docker compose down`（保留配置）或 `docker compose down -v`（连数据卷一起删）
 - stop.sh 停完会逐个检查端口：如果某个端口仍被占用，会直接列出占用它的进程，照着处理就行；如果占用它的是别的程序，先停掉那个程序或换一台服务器。
 
 ## 说明
 
-- 架构：有域名时 Caddy 在 443 终止 TLS，只把随机 WS 路径反代到 xray，其余请求返回普通网页响应（伪装）
+- 架构：有域名时 Caddy 在 HTTPS 端口（默认 443，可改高位端口）终止 TLS，只把随机 WS 路径反代到 xray，其余请求返回普通网页响应（伪装）；80 端口只用于证书验证
 - 链接里的 UUID 等同于密码，不要外传；泄露了重跑脚本即可换一套
 - 如果 `check.sh` 显示 hosting=true（机房 IP）且之后出现 0 播放/限流，优先换住宅/ISP 的干净 IP，换节点比调参数管用
