@@ -8,7 +8,7 @@ pass() { echo "  [通过] $1"; }
 warn() { echo "  [注意] $1"; }
 fail() { echo "  [风险] $1"; }
 
-echo "== 1/6 节点 IP 与地区 =="
+echo "== 1/7 节点 IP 与地区 =="
 IPJSON="$(curl -s --max-time 10 "https://ip-api.org/json/" || true)"
 if [ -z "$IPJSON" ]; then
   warn "ip-api.org 查不到，改用 ipinfo.io"
@@ -43,7 +43,7 @@ else
 fi
 
 echo ""
-echo "== 2/6 IPv6 是否禁用 =="
+echo "== 2/7 IPv6 是否禁用 =="
 V6="$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo "?")"
 if [ "$V6" = "1" ]; then
   pass "IPv6 已禁用（disable_ipv6=1）"
@@ -58,7 +58,7 @@ else
 fi
 
 echo ""
-echo "== 3/6 DNS 解析路径 =="
+echo "== 3/7 DNS 解析路径 =="
 if command -v dig >/dev/null 2>&1; then
   RESOLVER="$(dig +short whoami.akamai.net @1.1.1.1 2>/dev/null | head -1)"
   [ -n "$RESOLVER" ] && echo "  经 1.1.1.1 解析的出口解析器 IP：$RESOLVER（应为 Cloudflare 的 IP，非国内运营商）"
@@ -69,7 +69,7 @@ fi
 echo "  xray 已配置 DoH(1.1.1.1/8.8.8.8)+TCP 兜底、只解析 IPv4，服务端不再走明文 UDP 53"
 
 echo ""
-echo "== 4/6 TikTok 可达性（从节点 IP 出口测） =="
+echo "== 4/7 TikTok 可达性（从节点 IP 出口测） =="
 TT_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://www.tiktok.com/" || true)"
 API_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://api16-normal-c-useast1a.tiktokv.com/" || true)"
 echo "  tiktok.com -> HTTP $TT_CODE"
@@ -81,7 +81,7 @@ else
 fi
 
 echo ""
-echo "== 5/6 手机端自查（在手机上开着节点做） =="
+echo "== 5/7 手机端自查（在手机上开着节点做） =="
 echo "  节点只能管服务端这一半，手机端泄漏要这样验："
 echo "  1) 打开 https://www.dnsleaktest.com 点 Extended test："
 echo "     全部 DNS 服务器 IP 应该都是节点所在国家/机房的，出现中国运营商 DNS = 泄漏"
@@ -90,7 +90,7 @@ echo "     不能出现你的真实 IP、不能出现 IPv6 地址、时区/语�
 echo "  3) TikTok 里刷几个视频再看个人主页地区：应与节点地区一致"
 echo "  4) 手机设置核对（见 README）：已拔国内 SIM 卡、时区语言=节点地区、定位已关"
 echo ""
-echo "== 6/6 节点端口连通性 =="
+echo "== 6/7 节点端口连通性 =="
 # 读安装记录（install.sh 写下的实际端口），没有就读 clash.yaml，再没有回退默认
 CK_DIR="$(cd "$(dirname "$0")" && pwd)"
 CK_TLS=""; CK_PORT=""; CK_HOST=""; CK_PATH=""; CK_PROTO="http"
@@ -127,6 +127,51 @@ else
   CK_CODE="$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$CK_PROTO://$CK_HOST:$CK_PORT/" || true)"
   echo "  首页 -> HTTP $CK_CODE"
   if [ "$CK_CODE" = "200" ]; then pass "节点端口 $CK_PORT 可达"; else fail "节点端口 $CK_PORT 不可达（HTTP $CK_CODE）"; fi
+fi
+
+echo ""
+echo "== 7/7 证书与续签 =="
+# 证书方式与到期天数：从 .env 读（install.sh 写下）；TLS 模式才有证书
+if [ "${TLS_MODE:-}" != "1" ]; then
+  echo "  明文模式，没有证书（补域名重跑 install.sh 可升级 TLS）"
+else
+  if [ "${CERT_METHOD:-http}" = "dns" ]; then
+    echo "  证书方式：DNS 验证（Cloudflare），续签全自动，不用管 80 端口"
+  else
+    echo "  证书方式：默认走 80（HTTP-01），续签要走 80 端口"
+    echo "  注意：如果域名现在指向中转、且 80 没转到这台机，续签会失败，见 README“手动续签”一节"
+  fi
+  if [ -n "${DOMAIN:-}" ]; then
+    CK_HTTPS="${HTTPS_PORT:-443}"
+    if command -v openssl >/dev/null 2>&1; then
+      CERT_END="$(timeout 10 openssl s_client -connect "127.0.0.1:$CK_HTTPS" -servername "$DOMAIN" </dev/null 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+      if [ -n "$CERT_END" ]; then
+        CERT_END_EPOCH="$(date -d "$CERT_END" +%s 2>/dev/null || echo "")"
+        NOW_EPOCH="$(date +%s)"
+        if [ -n "$CERT_END_EPOCH" ]; then
+          CERT_DAYS="$(( (CERT_END_EPOCH - NOW_EPOCH) / 86400 ))"
+          echo "  证书到期日：$CERT_END（剩余约 $CERT_DAYS 天）"
+          if [ "$CERT_DAYS" -lt 0 ]; then
+            fail "证书已过期 $(( -CERT_DAYS )) 天！节点已不可用，立即按 README“手动续签”处理"
+          elif [ "$CERT_DAYS" -le 14 ]; then
+            warn "证书 14 天内到期；Caddy 会在到期前 30 天内自动续签，到期还没续上就按 README“手动续签”处理"
+          elif [ "$CERT_DAYS" -le 30 ]; then
+            pass "证书剩余 $CERT_DAYS 天，Caddy 会自动续签"
+          else
+            pass "证书剩余 $CERT_DAYS 天，Caddy 会在到期前 30 天内自动续签"
+          fi
+        else
+          warn "读到证书但解析不到期日：$CERT_END"
+        fi
+      else
+        warn "读不到证书（Caddy 可能没起来，或证书还没签好）；等几分钟再跑 check.sh"
+      fi
+    else
+      warn "本机无 openssl，看不到证书剩余天数（apt install openssl 可装）"
+    fi
+  else
+    warn "没找到域名（.env 不在），看不到证书剩余天数"
+  fi
 fi
 
 echo ""
