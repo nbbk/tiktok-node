@@ -59,7 +59,7 @@ WS_PORT=9080 bash install.sh
 - **[1] 默认走 80（HTTP-01）**：最简单，什么都不用准备，装完 Caddy 自己签证书、到期自己续。前提是 80 端口必须空闲、域名要指向这台落地机。适合单节点、80 没被占的情况。
 - **[2] DNS 验证（Cloudflare，DNS-01）**：不用 80 端口，域名不用改来改去，续签全自动，不怕忘。前提是域名 DNS 在 Cloudflare，要去 Cloudflare 后台开一个只给改 DNS 权限的 API 令牌。适合 80 被占了、多节点、怕忘续签的情况。
 
-开令牌的方法：登录 Cloudflare 后台 → 右上角头像 → My Profile → API Tokens → Create Token → 用“Edit zone DNS”模板 → 权限里只留 Zone:DNS:Edit（和 Zone:Zone:Read），Zone Resources 选你的域名所在的 zone → Create Token，把生成的令牌粘贴给安装脚本。**不要用 Global API Key**（权限太大，泄露了整个账号都危险）。令牌只存在服务器的 `.env` 里（600 权限，只有 root 能读），脚本不会把它打印出来。
+开令牌的详细步骤见 [CLOUDFLARE_TOKEN.md](CLOUDFLARE_TOKEN.md)（按 Cloudflare 最新界面一步一步写，权限只留 Zone:DNS:Edit 和 Zone:Zone:Read，新版令牌以 `cfut_` 开头）。**不要用 Global API Key**（权限太大，泄露了整个账号都危险）。令牌只存在服务器的 `.env` 里（600 权限，只有 root 能读），脚本不会把它打印出来。
 
 也可以提前预设好，安装时不再问（令牌放命令行会进 shell 历史，不放心就安装时交互粘贴，输入时不回显）：
 
