@@ -54,7 +54,10 @@ echo "端口检查："
 CHECK_PORTS="80 443 8080"
 if [ -n "$COMPOSE_DIR" ] && [ -f "$COMPOSE_DIR/.env" ]; then
   set -a; . "$COMPOSE_DIR/.env" 2>/dev/null; set +a
-  if [ "${TLS_MODE:-}" = "1" ]; then CHECK_PORTS="80 ${HTTPS_PORT:-443}";
+  if [ "${TLS_MODE:-}" = "1" ]; then
+    # DNS 验证模式没映射 80，80 不用查
+    if [ "${CERT_METHOD:-http}" = "dns" ]; then CHECK_PORTS="${HTTPS_PORT:-443}";
+    else CHECK_PORTS="80 ${HTTPS_PORT:-443}"; fi
   elif [ "${TLS_MODE:-}" = "0" ]; then CHECK_PORTS="${WS_PORT:-8080}"; fi
 fi
 STILL_HELD=""
@@ -89,6 +92,14 @@ if [ "$REMOVE" = "1" ]; then
     rm -f /etc/sysctl.d/99-tiktok-node.conf
     sysctl -p >/dev/null 2>&1 || true
     echo "  已删除 /etc/sysctl.d/99-tiktok-node.conf（IPv6 与网络调优已恢复）"
+  fi
+  # DNS 验证模式用的自定义 Caddy 镜像也一并删（别的容器还在用就删不掉，不报错）
+  if docker image inspect caddy-cloudflare:latest >/dev/null 2>&1; then
+    if docker rmi caddy-cloudflare:latest >/dev/null 2>&1; then
+      echo "  已删除自定义 Caddy 镜像 caddy-cloudflare（DNS 验证模式用的）"
+    else
+      echo "  自定义 Caddy 镜像 caddy-cloudflare 还在被别的容器用，这次没删"
+    fi
   fi
   # 只删名字里带 tiktok-node-kit 的目录，脚本退出后再删（避免删正在执行的文件）
   if [ -n "$COMPOSE_DIR" ] && [ -f "$COMPOSE_DIR/docker-compose.yml" ]; then
